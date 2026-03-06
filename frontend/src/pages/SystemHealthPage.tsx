@@ -16,12 +16,17 @@ export default function SystemHealthPage() {
             setHealth(res.data);
             setLastUpdated(new Date());
 
-            // Try to load ML metrics
+            // Try to load ML metrics through proxy
             try {
-                const mlRes = await axios.get('http://localhost:8001/evaluate', { timeout: 5000 });
+                const mlRes = await healthApi.getMlMetrics();
                 setMlMetrics(mlRes.data);
-            } catch {
-                // ML not available
+            } catch (err) {
+                console.warn('ML metrics failed through proxy:', err);
+                // Fallback to direct if proxy fails (unlikely)
+                try {
+                    const directRes = await axios.get('http://localhost:8001/evaluate', { timeout: 2000 });
+                    setMlMetrics(directRes.data);
+                } catch { }
             }
         } catch (e) {
             console.error(e);

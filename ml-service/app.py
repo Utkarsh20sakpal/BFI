@@ -44,11 +44,21 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Open to allow dashboard to hit /evaluate directly
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/health")
+def health():
+    """Health check endpoint for Render/Backend."""
+    return {
+        "status": "ok",
+        "model_loaded": ml_model.is_loaded(),
+        "timestamp": datetime.now().isoformat()
+    }
 
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────

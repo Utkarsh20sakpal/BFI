@@ -67,4 +67,18 @@ router.get('/', async (req, res) => {
     }
 });
 
+/**
+ * GET /api/health/ml-metrics
+ * Proxy to get internal ML model performance metrics
+ */
+router.get('/ml-metrics', async (req, res) => {
+    try {
+        const mlUrl = process.env.ML_SERVICE_URL || 'http://localhost:8001';
+        const mlRes = await axios.get(`${mlUrl}/evaluate`, { timeout: 5000 });
+        res.json(mlRes.data);
+    } catch (err) {
+        res.status(503).json({ error: 'ML Service unreachable', details: err.message });
+    }
+});
+
 module.exports = router;

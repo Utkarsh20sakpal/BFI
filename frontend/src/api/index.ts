@@ -93,6 +93,7 @@ export const settingsApi = {
 // ─── HEALTH ────────────────────────────────────
 export const healthApi = {
     get: () => api.get('/health'),
+    getMlMetrics: () => api.get('/health/ml-metrics'),
 };
 
 // ─── SIMULATION ────────────────────────────────
