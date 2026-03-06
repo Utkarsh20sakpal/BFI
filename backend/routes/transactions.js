@@ -7,6 +7,7 @@ const { analyzeTransaction, createAlertIfNeeded, updateAccountStats } = require(
 const { addTransactionToGraph } = require('../services/neo4j');
 const { protect } = require('../middleware/auth');
 const { protectApiKey } = require('../middleware/apiKey');
+const { analyzeForFraudNetworks } = require('../services/fraudNetwork');
 
 /**
  * POST /api/transactions
@@ -100,6 +101,22 @@ router.post('/', protectApiKey, async (req, res) => {
                 await transaction.save();
             }
         }
+
+        // Non-blocking: scan for fraud networks after ingestion
+        analyzeForFraudNetworks(transaction).then(detectedNetworks => {
+            if (detectedNetworks.length > 0 && req.io) {
+                detectedNetworks.forEach(network => {
+                    req.io.emit('new_fraud_network', {
+                        networkId: network.networkId,
+                        pattern: network.detectedPattern,
+                        accounts: network.accountCount,
+                        riskScore: network.networkRiskScore,
+                        riskLevel: network.riskLevel,
+                        timestamp: new Date().toISOString(),
+                    });
+                });
+            }
+        }).catch(() => { });
 
         // Emit real-time transaction event
         if (req.io) {

@@ -16,7 +16,9 @@ const alertSchema = new mongoose.Schema({
     }],
     fraudType: {
         type: String,
-        enum: ['Layering', 'Structuring', 'Circular Flow', 'Dormant Account', 'Large Transaction', 'Rapid Transfer', 'ML Anomaly', 'Multiple Flags'],
+        enum: ['Layering', 'Structuring', 'Circular Flow', 'Dormant Account', 'Large Transaction',
+            'Rapid Transfer', 'ML Anomaly', 'Multiple Flags', 'Behavioral Anomaly',
+            'Fraud Network', 'Account Takeover'],
         required: true,
     },
     riskScore: {

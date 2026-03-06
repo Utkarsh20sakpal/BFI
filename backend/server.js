@@ -14,6 +14,7 @@ const graphRoutes = require('./routes/graph');
 const healthRoutes = require('./routes/health');
 const simulationRoutes = require('./routes/simulation');
 const settingsRoutes = require('./routes/settings');
+const networkRoutes = require('./routes/networks');
 
 const app = express();
 const server = http.createServer(app);
@@ -60,6 +61,7 @@ app.use('/api/graph', protect, graphRoutes);
 app.use('/api/health', protect, healthRoutes);
 app.use('/api/simulation', protect, restrictTo('admin', 'fraud_analyst'), simulationRoutes);
 app.use('/api/settings', protect, restrictTo('admin'), settingsRoutes);
+app.use('/api/networks', protect, networkRoutes);
 
 // Legacy route compatibility
 app.post('/transaction', async (req, res) => {
