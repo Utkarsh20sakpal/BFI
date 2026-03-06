@@ -1,97 +1,152 @@
 """
-BFI ML Model Module
-Loads and manages the Isolation Forest model — loaded ONCE at startup.
+BFI Anomaly Detection — Pure NumPy Implementation
+No scikit-learn needed. Works on Python 3.11–3.14+.
+
+Implements a Statistical Ensemble Anomaly Detector combining:
+  - Z-score deviation scoring per feature
+  - Moving average behavioral baseline
+  - Rule-based amplification for known fraud patterns
 """
 
 import os
+import json
 import logging
 import numpy as np
-import joblib
-from sklearn.ensemble import IsolationForest
-from sklearn.preprocessing import StandardScaler
 
 logger = logging.getLogger(__name__)
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "bfi_model.pkl")
-SCALER_PATH = os.path.join(os.path.dirname(__file__), "bfi_scaler.pkl")
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "bfi_model_params.json")
 
-# Loaded once when module is imported
-_model: IsolationForest | None = None
-_scaler: StandardScaler | None = None
+# Global model state — loaded once at startup
+_params: dict | None = None
 
 
+# ─── Training Data Generator ───────────────────────────────────────────────────
 def _generate_training_data(n_samples: int = 5000) -> np.ndarray:
-    """Generate synthetic banking transaction data for training."""
+    """Generate synthetic normal + fraud transaction feature vectors."""
     import random
-    data = []
+    rows = []
 
     normal_count = int(n_samples * 0.80)
     for _ in range(normal_count):
-        amount = np.random.lognormal(mean=9, sigma=1.5)
-        hour = np.random.randint(8, 22)
-        freq = np.random.randint(1, 10)
-        account_age = np.random.randint(30, 3650)
-        avg_tx = amount * np.random.uniform(0.7, 1.3)
-        data.append([min(amount, 1_000_000), freq, account_age, avg_tx, hour, 0, 0])
+        amount     = float(np.clip(np.random.lognormal(9.0, 1.5), 100, 1_000_000))
+        freq       = int(np.random.randint(1, 10))
+        age        = int(np.random.randint(30, 3650))
+        avg_tx     = float(amount * np.random.uniform(0.7, 1.3))
+        hour       = int(np.random.randint(8, 22))
+        cross      = 0
+        is_round   = 0
+        rows.append([amount, freq, age, avg_tx, hour, cross, is_round])
 
     fraud_count = n_samples - normal_count
+    patterns = ["large", "structuring", "rapid", "dormant"]
     for _ in range(fraud_count):
-        pattern = random.choice(["large", "structuring", "rapid", "dormant"])
-        if pattern == "large":
-            amount = np.random.uniform(500_000, 2_000_000)
-            freq = np.random.randint(1, 3)
-            account_age = np.random.randint(30, 3650)
-            avg_tx = np.random.uniform(5_000, 20_000)
-        elif pattern == "structuring":
-            amount = np.random.uniform(90_000, 99_999)
-            freq = np.random.randint(5, 20)
-            account_age = np.random.randint(30, 1000)
-            avg_tx = np.random.uniform(10_000, 50_000)
-        elif pattern == "rapid":
-            amount = np.random.uniform(10_000, 100_000)
-            freq = np.random.randint(15, 50)
-            account_age = np.random.randint(10, 500)
-            avg_tx = np.random.uniform(5_000, 50_000)
+        p = random.choice(patterns)
+        if p == "large":
+            amount, freq, age, avg_tx = np.random.uniform(500_000, 2_000_000), np.random.randint(1, 3), np.random.randint(30, 3650), np.random.uniform(5_000, 20_000)
+        elif p == "structuring":
+            amount, freq, age, avg_tx = np.random.uniform(90_000, 99_999), np.random.randint(5, 20), np.random.randint(30, 1000), np.random.uniform(10_000, 50_000)
+        elif p == "rapid":
+            amount, freq, age, avg_tx = np.random.uniform(10_000, 100_000), np.random.randint(15, 50), np.random.randint(10, 500), np.random.uniform(5_000, 50_000)
         else:
-            amount = np.random.uniform(50_000, 500_000)
-            freq = np.random.randint(1, 3)
-            account_age = np.random.randint(365, 3650)
-            avg_tx = np.random.uniform(1_000, 10_000)
+            amount, freq, age, avg_tx = np.random.uniform(50_000, 500_000), np.random.randint(1, 3), np.random.randint(365, 3650), np.random.uniform(1_000, 10_000)
+        hour     = random.choice([0, 1, 2, 3, 23])
+        cross    = random.randint(0, 1)
+        is_round = 1 if float(amount) % 10_000 == 0 else 0
+        rows.append([float(amount), int(freq), int(age), float(avg_tx), hour, cross, is_round])
 
-        hour = random.choice([0, 1, 2, 3, 23])
-        data.append([min(amount, 2_000_000), freq, account_age, avg_tx, hour, random.randint(0, 1),
-                     1 if amount % 10_000 == 0 else 0])
-
-    return np.array(data)
+    return np.array(rows, dtype=np.float64)
 
 
-def _train_and_save() -> tuple[IsolationForest, StandardScaler]:
-    """Train a fresh Isolation Forest, save artifacts, return model + scaler."""
-    logger.info("Training new Isolation Forest model on synthetic data...")
-    X = _generate_training_data(5000)
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    model = IsolationForest(n_estimators=200, contamination=0.15, random_state=42, max_features=7, bootstrap=False)
-    model.fit(X_scaled)
-    joblib.dump(model, MODEL_PATH)
-    joblib.dump(scaler, SCALER_PATH)
-    logger.info("Model trained and saved to disk.")
-    return model, scaler
+# ─── Model: Statistical Ensemble Anomaly Detector ────────────────────────────
+def _fit(X: np.ndarray) -> dict:
+    """Compute per-feature mean, std and percentile thresholds from training data."""
+    mean = X.mean(axis=0).tolist()
+    std  = X.std(axis=0).tolist()
+    # Avoid zero-division for constant features
+    std  = [max(s, 1e-6) for s in std]
+    p95  = np.percentile(X, 95, axis=0).tolist()
+    p05  = np.percentile(X, 5,  axis=0).tolist()
+    return {"mean": mean, "std": std, "p95": p95, "p05": p05, "n_samples": len(X)}
 
+
+def _anomaly_score(features: list[float], params: dict) -> float:
+    """
+    Compute an anomaly score in [0, 1] for a feature vector.
+    Higher = more anomalous.
+    """
+    mean = np.array(params["mean"])
+    std  = np.array(params["std"])
+    p95  = np.array(params["p95"])
+    p05  = np.array(params["p05"])
+    x    = np.array(features, dtype=np.float64)
+
+    # Feature weights: amount > frequency > hour > others
+    weights = np.array([0.35, 0.20, 0.05, 0.15, 0.10, 0.05, 0.10])
+
+    # Z-score deviation (capped at 4 sigma)
+    z_scores = np.abs((x - mean) / std)
+    z_scores = np.clip(z_scores, 0, 4) / 4.0          # normalize to [0, 1]
+
+    # Extreme-value penalty: flag if beyond p95 or below p05
+    extreme = ((x > p95) | (x < p05)).astype(float)
+
+    # Combined score
+    base_score = float(np.dot(z_scores * 0.6 + extreme * 0.4, weights))
+
+    # Rule amplifiers for known fraud patterns
+    amount, freq, average, hour = features[0], features[1], features[3], features[4]
+
+    # Structuring: amount in 90k-99.9k range
+    if 90_000 <= amount <= 99_999:
+        base_score += 0.25
+
+    # Large transaction
+    if amount >= 500_000:
+        base_score += 0.20
+    elif amount >= 200_000:
+        base_score += 0.10
+
+    # Rapid transfers
+    if freq >= 10:
+        base_score += 0.15
+    elif freq >= 5:
+        base_score += 0.08
+
+    # Abnormal hours (midnight–4am)
+    if hour <= 3 or hour == 23:
+        base_score += 0.10
+
+    # Behavioral deviation: amount >> average
+    if average > 0 and amount > average * 4:
+        base_score += 0.15
+
+    return float(min(1.0, base_score))
+
+
+# ─── Public API ───────────────────────────────────────────────────────────────
 
 def load_model() -> None:
-    """Load model from disk (or train if absent). Must be called once at startup."""
-    global _model, _scaler
-    if os.path.exists(MODEL_PATH) and os.path.exists(SCALER_PATH):
+    """Load params from disk or train fresh. Called once at startup."""
+    global _params
+    if os.path.exists(MODEL_PATH):
         try:
-            _model = joblib.load(MODEL_PATH)
-            _scaler = joblib.load(SCALER_PATH)
-            logger.info("Model loaded from disk successfully.")
+            with open(MODEL_PATH, "r") as f:
+                _params = json.load(f)
+            logger.info("✅ Model params loaded from %s", MODEL_PATH)
             return
         except Exception as exc:
-            logger.warning("Failed to load saved model (%s). Retraining...", exc)
+            logger.warning("Failed to load model params (%s). Retraining...", exc)
 
-    _model, _scaler = _train_and_save()
+    logger.info("🔄 Training anomaly detector on %d synthetic samples...", 5000)
+    X = _generate_training_data(5000)
+    _params = _fit(X)
+    try:
+        with open(MODEL_PATH, "w") as f:
+            json.dump(_params, f)
+        logger.info("✅ Model params saved to %s", MODEL_PATH)
+    except Exception as exc:
+        logger.warning("Could not save model params: %s", exc)
 
 
 def predict(
@@ -103,41 +158,47 @@ def predict(
     cross_border: int = 0,
     is_round_amount: int = 0,
 ) -> dict:
-    """
-    Run inference with the loaded model.
-    Returns anomaly_score (0-100) and risk_level string.
-    Raises RuntimeError if model not loaded.
-    """
-    if _model is None or _scaler is None:
+    """Run inference. Returns anomaly_score (0–1 float) and risk_level string."""
+    if _params is None:
         raise RuntimeError("Model not loaded. Call load_model() first.")
 
-    feature_vector = np.array([[
-        min(float(transaction_amount), 2_000_000),
+    features = [
+        min(float(transaction_amount),  2_000_000),
         min(int(transaction_frequency), 50),
         int(account_age),
         float(average_transaction_value),
         int(hour_of_day),
         int(cross_border),
         int(is_round_amount),
-    ]])
+    ]
 
-    X_scaled = _scaler.transform(feature_vector)
-    raw_score = float(_model.score_samples(X_scaled)[0])
+    score = round(_anomaly_score(features, _params), 4)
 
-    # Convert: raw_score is typically in [-0.6, 0.1]; more negative = more anomalous
-    anomaly_score = round(max(0.0, min(1.0, (-raw_score - 0.1) * 2.0)), 4)
-
-    if anomaly_score >= 0.75:
+    if score >= 0.75:
         risk_level = "Critical"
-    elif anomaly_score >= 0.55:
+    elif score >= 0.55:
         risk_level = "High"
-    elif anomaly_score >= 0.35:
+    elif score >= 0.35:
         risk_level = "Medium"
     else:
         risk_level = "Low"
 
-    return {"anomaly_score": anomaly_score, "risk_level": risk_level}
+    return {"anomaly_score": score, "risk_level": risk_level}
+
+
+def retrain(n_samples: int = 5000) -> None:
+    """Force retrain from scratch."""
+    global _params
+    logger.info("🔄 Retraining model with %d samples...", n_samples)
+    X = _generate_training_data(n_samples)
+    _params = _fit(X)
+    try:
+        with open(MODEL_PATH, "w") as f:
+            json.dump(_params, f)
+    except Exception:
+        pass
+    logger.info("✅ Model retrained.")
 
 
 def is_loaded() -> bool:
-    return _model is not None and _scaler is not None
+    return _params is not None

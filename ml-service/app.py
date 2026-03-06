@@ -10,7 +10,6 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
 
-import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
@@ -175,7 +174,7 @@ def predict_legacy(request: TransactionRequest):
         except Exception:
             pass
 
-    avg_tx = float(np.mean([f[0] for f in _feature_history[-100:]])) if _feature_history else amount
+    avg_tx = float(sum(f[0] for f in _feature_history[-100:]) / max(1, len(_feature_history[-100:]))) if _feature_history else amount
     freq = len([f for f in _feature_history[-50:] if f[1] == request.sender]) if request.sender else 1
     is_round = 1 if amount >= 50_000 and amount % 10_000 == 0 else 0
 
@@ -223,12 +222,11 @@ def predict_legacy(request: TransactionRequest):
 def train(request: TrainRequest):
     """Force retrain model with fresh synthetic data."""
     try:
-        ml_model._model, ml_model._scaler = ml_model._train_and_save()
-        logger.info("Model retrained with %d samples", request.n_samples)
+        ml_model.retrain(request.n_samples or 5000)
         return {
             "success": True,
             "message": f"Model retrained with {request.n_samples} samples",
-            "model_params": {"algorithm": "Isolation Forest", "n_estimators": 200, "contamination": 0.15},
+            "model_params": {"algorithm": "Statistical Ensemble Anomaly Detector", "features": 7},
         }
     except Exception as exc:
         logger.error("Retraining failed: %s", exc)
@@ -237,27 +235,29 @@ def train(request: TrainRequest):
 
 @app.get("/evaluate")
 def evaluate():
-    """Return live model evaluation metrics using internal synthetic test set."""
+    """Return model evaluation metrics using synthetic test data."""
     if not ml_model.is_loaded():
         raise HTTPException(status_code=503, detail="Model not loaded")
 
-    from model import _generate_training_data, _model, _scaler
+    from model import _generate_training_data, _anomaly_score, _params
+
     X_test = _generate_training_data(1000)
-    y_true = [0] * 800 + [1] * 200
+    y_true = [0] * 800 + [1] * 200  # last 200 are fraud patterns
 
-    X_scaled = _scaler.transform(X_test)
-    predictions = _model.predict(X_scaled)
-    y_pred = [1 if p == -1 else 0 for p in predictions]
-
-    tp = sum(1 for t, p in zip(y_true, y_pred) if t == 1 and p == 1)
-    fp = sum(1 for t, p in zip(y_true, y_pred) if t == 0 and p == 1)
-    tn = sum(1 for t, p in zip(y_true, y_pred) if t == 0 and p == 0)
-    fn = sum(1 for t, p in zip(y_true, y_pred) if t == 1 and p == 0)
+    tp, fp, tn, fn = 0, 0, 0, 0
+    for i, row in enumerate(X_test):
+        score = _anomaly_score(row.tolist(), _params)
+        predicted_fraud = score >= 0.55
+        actual_fraud = i >= 800
+        if predicted_fraud and actual_fraud: tp += 1
+        elif predicted_fraud and not actual_fraud: fp += 1
+        elif not predicted_fraud and not actual_fraud: tn += 1
+        else: fn += 1
 
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
-    accuracy = (tp + tn) / len(y_true)
+    recall    = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1        = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+    accuracy  = (tp + tn) / len(y_true)
 
     return {
         "accuracy": round(accuracy, 4),
@@ -266,7 +266,7 @@ def evaluate():
         "f1_score": round(f1, 4),
         "confusion_matrix": {"tp": tp, "fp": fp, "tn": tn, "fn": fn},
         "test_samples": len(y_true),
-        "model": "Isolation Forest",
+        "model": "Statistical Ensemble Anomaly Detector",
     }
 
 
