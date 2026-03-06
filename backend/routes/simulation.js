@@ -1,6 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const axios = require('axios');
+const { v4: uuidv4 } = require('uuid');
+const Transaction = require('../models/Transaction');
+const Account = require('../models/Account');
+const { analyzeTransaction, createAlertIfNeeded, updateAccountStats } = require('../services/fraudDetection');
+const { addTransactionToGraph } = require('../services/neo4j');
+const { analyzeForFraudNetworks } = require('../services/fraudNetwork');
 
 let simulationRunning = false;
 let simulationInterval = null;
@@ -10,6 +15,70 @@ let simulationStats = {
     errors: 0,
     startTime: null,
 };
+
+/**
+ * Shared logic to process a simulated transaction internally
+ */
+async function processSimulatedTransaction(txData, io) {
+    // 1. Upsert accounts
+    await Promise.all([
+        Account.findOneAndUpdate(
+            { accountId: txData.sender },
+            { $setOnInsert: { accountId: txData.sender, name: `SIM Account ${txData.sender}`, status: 'active', createdAt: new Date(), lastActivity: new Date() } },
+            { upsert: true }
+        ),
+        Account.findOneAndUpdate(
+            { accountId: txData.receiver },
+            { $setOnInsert: { accountId: txData.receiver, name: `SIM Account ${txData.receiver}`, status: 'active', createdAt: new Date(), lastActivity: new Date() } },
+            { upsert: true }
+        )
+    ]);
+
+    // 2. Create Transaction object
+    const transactionId = `SIM-${Date.now().toString(36).toUpperCase()}-${uuidv4().slice(0, 4).toUpperCase()}`;
+    const transaction = new Transaction({
+        transactionId,
+        ...txData,
+        timestamp: txData.timestamp ? new Date(txData.timestamp) : new Date(),
+        status: 'completed'
+    });
+
+    // 3. Run Analysis
+    const analysisResult = await analyzeTransaction(transaction);
+    transaction.ruleScore = analysisResult.ruleScore;
+    transaction.mlScore = analysisResult.mlScore;
+    transaction.riskScore = analysisResult.riskScore;
+    transaction.flags = analysisResult.flags;
+    transaction.fraudType = analysisResult.fraudType;
+    transaction.isFraud = analysisResult.isFraud;
+    transaction.status = analysisResult.isFraud ? 'flagged' : 'completed';
+
+    // 4. Save & Update
+    await transaction.save();
+    await updateAccountStats(transaction);
+
+    // 5. Async tasks
+    addTransactionToGraph(transaction).catch(() => { });
+    if (analysisResult.isFraud) {
+        await createAlertIfNeeded(transaction, analysisResult, io);
+    }
+    analyzeForFraudNetworks(transaction).catch(() => { });
+
+    // 6. Emit real-time event
+    if (io) {
+        io.emit('new_transaction', {
+            transactionId,
+            sender: transaction.sender,
+            receiver: transaction.receiver,
+            amount: transaction.amount,
+            riskScore: transaction.riskScore,
+            isFraud: transaction.isFraud,
+            timestamp: transaction.timestamp
+        });
+    }
+
+    return transaction;
+}
 
 /**
  * POST /api/simulation/start
@@ -47,26 +116,23 @@ router.post('/start', async (req, res) => {
 
         try {
             const isFraud = Math.random() < fraudRate;
-            const tx = isFraud
+            const txData = isFraud
                 ? generateFraudTransaction(accounts, patterns)
                 : generateNormalTransaction(accounts);
 
-            const apiUrl = `http://127.0.0.1:${process.env.PORT || 5000}/api/transactions`;
-            const response = await axios.post(apiUrl, tx, {
-                timeout: 5000,
-                headers: process.env.SERVICE_API_KEY ? { 'x-api-key': process.env.SERVICE_API_KEY } : {}
-            });
+            const transaction = await processSimulatedTransaction(txData, req.io);
 
             simulationStats.sent++;
-            if (response.data?.transaction?.isFraud) simulationStats.fraudDetected++;
+            if (transaction.isFraud) simulationStats.fraudDetected++;
 
             if (req.io) {
                 req.io.emit('simulation_progress', {
                     ...simulationStats,
-                    lastTransaction: response.data?.transaction,
+                    lastTransaction: transaction,
                 });
             }
         } catch (err) {
+            console.error('Simulation step error:', err);
             simulationStats.errors++;
         }
 
@@ -107,8 +173,7 @@ router.post('/demo', async (req, res) => {
         for (let i = 0; i < chain.length - 1; i++) {
             const timestamp = new Date(baseTime.getTime() + i * 60 * 1000); // 1 min apart
             try {
-                const apiUrl = `http://127.0.0.1:${process.env.PORT || 5000}/api/transactions`;
-                const response = await axios.post(apiUrl, {
+                const txData = {
                     sender: chain[i],
                     receiver: chain[i + 1],
                     amount: amount - (i * 1000), // slight decrease to simulate real layering
@@ -116,12 +181,10 @@ router.post('/demo', async (req, res) => {
                     type: 'transfer',
                     channel: 'NEFT',
                     description: `Demo layering transaction ${i + 1}`,
-                }, {
-                    timeout: 5000,
-                    headers: process.env.SERVICE_API_KEY ? { 'x-api-key': process.env.SERVICE_API_KEY } : {}
-                });
+                };
 
-                results.push(response.data);
+                const transaction = await processSimulatedTransaction(txData, req.io);
+                results.push({ success: true, transactionId: transaction.transactionId });
                 await new Promise(r => setTimeout(r, 200)); // small delay
             } catch (err) {
                 results.push({ error: err.message });
