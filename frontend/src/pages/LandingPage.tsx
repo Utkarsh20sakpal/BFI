@@ -1,6 +1,7 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { transactionApi, alertApi, accountApi } from '../api';
 import { Shield, Zap, Search, GitBranch, Lock, BarChart3, ChevronRight, Globe, Server, Cpu, Activity, FileText } from 'lucide-react';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
@@ -10,39 +11,75 @@ gsap.registerPlugin(ScrollTrigger);
 export default function LandingPage() {
     const navigate = useNavigate();
     const { user } = useAuth();
+    const [stats, setStats] = useState({
+        transactions: '...',
+        alerts: '...',
+        accounts: '...',
+        activeInvestigations: '...'
+    });
+
     const heroRef = useRef<HTMLDivElement>(null);
     const featuresRef = useRef<HTMLDivElement>(null);
     const statsRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
+        const fetchStats = async () => {
+            try {
+                const [txData, alertData, accData] = await Promise.all([
+                    transactionApi.stats(),
+                    alertApi.stats(),
+                    accountApi.stats()
+                ]);
+
+                setStats({
+                    transactions: txData.data.totalCount?.toLocaleString() || '0',
+                    alerts: alertData.data.totalAlerts?.toLocaleString() || '0',
+                    accounts: accData.data.totalAccounts?.toLocaleString() || '0',
+                    activeInvestigations: alertData.data.statusBreakdown?.open?.toLocaleString() || '0'
+                });
+            } catch (err) {
+                console.warn('Failed to fetch real-time stats for homepage');
+                setStats({
+                    transactions: '0',
+                    alerts: '0',
+                    accounts: '0',
+                    activeInvestigations: '0'
+                });
+            }
+        };
+
+        fetchStats();
+
         const ctx = gsap.context(() => {
             // Hero Animation
             const tl = gsap.timeline();
-            tl.from('.hero-title', { y: 100, opacity: 0, duration: 1, ease: 'power4.out' })
-                .from('.hero-subtitle', { y: 50, opacity: 0, duration: 0.8, ease: 'power3.out' }, '-=0.5')
-                .from('.hero-cta', { scale: 0.8, opacity: 0, duration: 0.5, ease: 'back.out(1.7)' }, '-=0.3')
-                .from('.hero-visual', { x: 100, opacity: 0, duration: 1.2, ease: 'power2.out' }, '-=1');
+            tl.from('.hero-title', { y: 60, opacity: 0, duration: 0.8, ease: 'power3.out' })
+                .from('.hero-subtitle', { y: 30, opacity: 0, duration: 0.8, ease: 'power2.out' }, '-=0.4')
+                .from('.hero-cta', { y: 20, opacity: 0, duration: 0.6, ease: 'power2.out' }, '-=0.3')
+                .from('.hero-visual', { scale: 0.95, opacity: 0, duration: 1, ease: 'power2.out' }, '-=0.8');
 
             // Floating elements animation
             gsap.to('.floating-blob', {
-                y: 'random(-50, 50)',
-                x: 'random(-30, 30)',
-                duration: 'random(3, 5)',
+                y: 'random(-40, 40)',
+                x: 'random(-20, 20)',
+                duration: 'random(4, 7)',
                 repeat: -1,
                 yoyo: true,
                 ease: 'sine.inOut'
             });
 
-            // Feature cards animation
+            // Feature cards animation - ensuring they ARE NOT hidden if JS fails or scroll trigger is finicky
             gsap.from('.feature-card', {
                 scrollTrigger: {
                     trigger: featuresRef.current,
-                    start: 'top 80%',
+                    start: 'top 85%',
+                    toggleActions: 'play none none none'
                 },
-                y: 60,
+                y: 40,
                 opacity: 0,
-                stagger: 0.2,
+                stagger: 0.15,
                 duration: 0.8,
+                clearProps: 'all',
                 ease: 'power2.out'
             });
 
@@ -50,13 +87,13 @@ export default function LandingPage() {
             gsap.from('.stat-item', {
                 scrollTrigger: {
                     trigger: statsRef.current,
-                    start: 'top 90%',
+                    start: 'top 95%',
                 },
-                scale: 0.5,
+                y: 20,
                 opacity: 0,
                 stagger: 0.1,
                 duration: 0.6,
-                ease: 'back.out(2)'
+                ease: 'power2.out'
             });
         });
 
@@ -177,10 +214,10 @@ export default function LandingPage() {
             <div ref={statsRef} className="relative z-10 bg-white shadow-2xl py-12 px-6">
                 <div className="max-w-7xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-8">
                     {[
-                        { label: 'Transactions Analyzed', val: '2.4B+' },
-                        { label: 'Fraud Savings', val: '₹840Cr' },
-                        { label: 'False Positives', val: '0.01%' },
-                        { label: 'Enterprise Nodes', val: '12k+' },
+                        { label: 'Transactions Processed', val: stats.transactions },
+                        { label: 'Intelligence Alerts', val: stats.alerts },
+                        { label: 'Active Investigations', val: stats.activeInvestigations },
+                        { label: 'Entities Monitored', val: stats.accounts },
                     ].map(s => (
                         <div key={s.label} className="text-center stat-item">
                             <div className="text-3xl lg:text-5xl font-extrabold text-navy-950 mb-1">{s.val}</div>
