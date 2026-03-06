@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Shield, Zap, Search, GitBranch, Lock, ChevronRight, Globe, Server, Cpu, Activity, FileText } from 'lucide-react';
+import { Shield, Zap, Search, GitBranch, Lock, ChevronRight, Globe, Server, Cpu, Activity, FileText, Play, Database } from 'lucide-react';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 
@@ -9,7 +9,7 @@ gsap.registerPlugin(ScrollTrigger);
 
 export default function LandingPage() {
     const navigate = useNavigate();
-    const { user } = useAuth();
+    const { user, logout } = useAuth();
 
     const heroRef = useRef<HTMLDivElement>(null);
     const featuresRef = useRef<HTMLDivElement>(null);
@@ -66,9 +66,17 @@ export default function LandingPage() {
         return () => ctx.revert();
     }, []);
 
-    const handleAction = () => {
+    const handleLaunch = () => {
         if (user) {
             navigate('/dashboard');
+        } else {
+            navigate('/login');
+        }
+    };
+
+    const handleAuth = () => {
+        if (user) {
+            logout();
         } else {
             navigate('/login');
         }
@@ -100,13 +108,40 @@ export default function LandingPage() {
                     <a href="#features" className="hover:text-teal-400 transition-colors">Intelligence</a>
                     <a href="#solutions" className="hover:text-teal-400 transition-colors">Solutions</a>
                     <a href="#security" className="hover:text-teal-400 transition-colors">Security</a>
+                    {user && (
+                        <div className="flex items-center gap-4 pl-8 border-l border-white/10">
+                            {user.role === 'admin' ? (
+                                <>
+                                    <button
+                                        onClick={() => navigate('/dashboard')}
+                                        className="text-teal-400 hover:text-teal-300 transition-colors flex items-center gap-1.5 font-bold text-xs uppercase tracking-wider"
+                                    >
+                                        Dashboard
+                                    </button>
+                                    <button
+                                        onClick={() => navigate('/simulation')}
+                                        className="text-teal-400 hover:text-teal-300 transition-colors flex items-center gap-1.5 font-bold text-xs uppercase tracking-wider pl-4 border-l border-white/5"
+                                    >
+                                        Admin Panel
+                                    </button>
+                                </>
+                            ) : (
+                                <button
+                                    onClick={() => navigate('/dashboard')}
+                                    className="text-teal-400 hover:text-teal-300 transition-colors flex items-center gap-1.5 font-bold text-xs uppercase tracking-wider"
+                                >
+                                    <Search size={14} /> Investigation Workspace
+                                </button>
+                            )}
+                        </div>
+                    )}
                 </div>
 
                 <button
-                    onClick={handleAction}
+                    onClick={handleAuth}
                     className="px-6 py-2.5 rounded-full bg-white text-navy-950 font-bold text-sm hover:bg-teal-400 hover:text-white transition-all shadow-lg hover:shadow-teal-500/30 active:scale-95"
                 >
-                    {user ? 'Go to Dashboard' : 'Enterprise Login'}
+                    {user ? 'Sign Out' : 'Enterprise Login'}
                 </button>
             </nav>
 
@@ -126,15 +161,18 @@ export default function LandingPage() {
                     </p>
                     <div className="flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-4 hero-cta">
                         <button
-                            onClick={handleAction}
+                            onClick={handleLaunch}
                             className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-gradient-to-r from-teal-600 to-blue-600 text-white font-bold text-lg hover:shadow-[0_0_30px_-5px_rgb(45,212,191)] transition-all group active:scale-[0.98]"
                         >
                             Launch Investigation Workspace
                             <ChevronRight className="inline-block ml-2 group-hover:translate-x-1 transition-transform" />
                         </button>
-                        <button className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-white/5 border border-white/10 text-white font-bold text-lg hover:bg-white/10 transition-all active:scale-[0.98]">
-                            View Documentation
-                        </button>
+                        <a
+                            href="#features"
+                            className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-white/5 border border-white/10 text-white font-bold text-lg hover:bg-white/10 transition-all active:scale-[0.98] text-center"
+                        >
+                            View Methodology
+                        </a>
                     </div>
                 </div>
 
@@ -200,7 +238,7 @@ export default function LandingPage() {
                 </div>
             </div>
 
-            {/* Features Section */}
+            {/* Intelligence Section (Features) */}
             <section id="features" ref={featuresRef} className="relative z-10 px-6 lg:px-12 py-32 max-w-7xl mx-auto">
                 <div className="text-center mb-20">
                     <h2 className="text-sm font-bold text-teal-400 uppercase tracking-[0.3em] mb-4">Enterprise Capabilities</h2>
@@ -209,42 +247,12 @@ export default function LandingPage() {
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                     {[
-                        {
-                            title: 'Network Intelligence',
-                            desc: 'Identify circular fund flows and layering chains across thousands of accounts in real-time.',
-                            icon: GitBranch,
-                            color: 'from-blue-500 to-cyan-500'
-                        },
-                        {
-                            title: 'AI Anomaly Detection',
-                            desc: 'Statistical Isolation Forest model discovers behavioral drifts and synthetic identity patterns.',
-                            icon: Cpu,
-                            color: 'from-teal-500 to-emerald-500'
-                        },
-                        {
-                            title: 'Graph Visualization',
-                            desc: 'Interactive Neo4j graph engine to map the exact money trail of complex financial crimes.',
-                            icon: Globe,
-                            color: 'from-purple-500 to-indigo-500'
-                        },
-                        {
-                            title: 'Rapid Forensics',
-                            desc: 'One-click deep dive into account history, device fingerprinting, and IP velocity checks.',
-                            icon: Search,
-                            color: 'from-orange-500 to-pink-500'
-                        },
-                        {
-                            title: 'GenAI Reporting',
-                            desc: 'Automated investigative reports generated by Gemini, summarizing complex evidence for legal teams.',
-                            icon: FileText,
-                            color: 'from-yellow-500 to-orange-500'
-                        },
-                        {
-                            title: 'Audit Sovereignty',
-                            desc: 'Immutable logs of every investigation step, ensuring compliance with global banking standards.',
-                            icon: Lock,
-                            color: 'from-red-500 to-rose-500'
-                        }
+                        { title: 'Network Intelligence', desc: 'Identify circular fund flows and layering chains across thousands of accounts in real-time.', icon: GitBranch, color: 'from-blue-500 to-cyan-500' },
+                        { title: 'AI Anomaly Detection', desc: 'Statistical Isolation Forest model discovers behavioral drifts and synthetic identity patterns.', icon: Cpu, color: 'from-teal-500 to-emerald-500' },
+                        { title: 'Graph Visualization', desc: 'Interactive Neo4j graph engine to map the exact money trail of complex financial crimes.', icon: Globe, color: 'from-purple-500 to-indigo-500' },
+                        { title: 'Rapid Forensics', desc: 'One-click deep dive into account history, device fingerprinting, and IP velocity checks.', icon: Search, color: 'from-orange-500 to-pink-500' },
+                        { title: 'GenAI Reporting', desc: 'Automated investigative reports generated by Gemini, summarizing complex evidence for legal teams.', icon: FileText, color: 'from-yellow-500 to-orange-500' },
+                        { title: 'Audit Sovereignty', desc: 'Immutable logs of every investigation step, ensuring compliance with global banking standards.', icon: Lock, color: 'from-red-500 to-rose-500' }
                     ].map((f, i) => (
                         <div key={i} className="glass-card p-8 group hover:border-teal-500/50 transition-all duration-500 feature-card relative overflow-hidden">
                             <div className={`absolute top-0 right-0 w-32 h-32 bg-gradient-to-br ${f.color} opacity-0 group-hover:opacity-5 blur-[60px] transition-opacity`} />
@@ -258,6 +266,71 @@ export default function LandingPage() {
                 </div>
             </section>
 
+            {/* Solutions Section */}
+            <section id="solutions" className="relative z-10 px-6 lg:px-12 py-32 max-w-7xl mx-auto border-t border-white/5">
+                <div className="flex flex-col lg:flex-row gap-16 items-center">
+                    <div className="flex-1">
+                        <h2 className="text-sm font-bold text-teal-400 uppercase tracking-[0.3em] mb-4">Enterprise Solutions</h2>
+                        <h3 className="text-4xl font-bold text-white mb-6">Designed for Modern <br />Financial Integrity</h3>
+                        <p className="text-slate-400 leading-relaxed mb-10 text-lg">
+                            BFI provides a comprehensive suite of tools designed to simulate, detect, and resolve financial crimes within a single unified environment.
+                        </p>
+
+                        <div className="space-y-6">
+                            {[
+                                { title: 'Training & Simulation', desc: 'Generate complex fraud scenarios to train your analysts and refine detection rules without risking real assets.', icon: Play },
+                                { title: 'Unified Data Fabric', desc: 'Securely ingest and normalize mismatched transaction data from multiple legacy banking systems.', icon: Database },
+                            ].map((s, i) => (
+                                <div key={i} className="flex gap-4 p-5 rounded-2xl bg-white/5 border border-white/10">
+                                    <div className="w-10 h-10 rounded-xl bg-teal-500/20 flex items-center justify-center text-teal-400 flex-shrink-0">
+                                        <s.icon size={20} />
+                                    </div>
+                                    <div>
+                                        <div className="text-white font-bold mb-1">{s.title}</div>
+                                        <div className="text-sm text-slate-400">{s.desc}</div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    <div className="flex-1 w-full">
+                        <div className="glass-card aspect-square md:aspect-video rounded-3xl relative overflow-hidden flex items-center justify-center group border border-white/10">
+                            <div className="absolute inset-0 bg-teal-500/5 group-hover:bg-teal-500/10 transition-colors" />
+                            <GitBranch size={120} className="text-teal-500/20 group-hover:scale-110 transition-transform" />
+                            <div className="absolute bottom-8 left-8 right-8 p-6 glass-card border-teal-500/30">
+                                <div className="text-teal-400 font-bold text-xs uppercase tracking-widest mb-2">Internal Tech Stack</div>
+                                <div className="text-white font-bold text-xl">React + Node.js + Neo4j + Python</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            {/* Security Section */}
+            <section id="security" className="relative z-10 px-6 lg:px-12 py-32 bg-navy-900/40 border-t border-white/5 overflow-hidden">
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full bg-blue-600/5 blur-[120px] rounded-full pointer-events-none" />
+                <div className="max-w-7xl mx-auto text-center relative z-10">
+                    <h2 className="text-sm font-bold text-blue-400 uppercase tracking-[0.3em] mb-4">Hardened Infrastructure</h2>
+                    <h3 className="text-4xl lg:text-5xl font-bold text-white mb-16">Security at Every Layer</h3>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-8 text-left">
+                        {[
+                            { title: 'End-to-End Encryption', desc: 'Every transaction simulation and log entry is protected using enterprise-grade AES-256 standards.', icon: Lock },
+                            { title: 'Immutable Audit Trail', desc: 'No investigation step can be deleted or modified. Maintain a perfect chain of custody for legal reporting.', icon: FileText },
+                            { title: 'Role-Based Control', desc: 'Granular permissions ensure that only authorized investigators can see PII and administrative controls.', icon: Shield },
+                        ].map((item, idx) => (
+                            <div key={idx} className="glass-card p-8 border-white/10 transition-all hover:bg-navy-800/80">
+                                <div className="w-12 h-12 rounded-2xl bg-blue-500/20 flex items-center justify-center text-blue-400 mb-6">
+                                    <item.icon size={24} />
+                                </div>
+                                <h4 className="text-xl font-bold text-white mb-3">{item.title}</h4>
+                                <p className="text-slate-400 text-sm leading-relaxed">{item.desc}</p>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </section>
+
             {/* CTA Section */}
             <section className="relative z-10 px-6 lg:px-12 py-32 max-w-5xl mx-auto text-center">
                 <div className="glass-card p-12 lg:p-20 rounded-[3rem] border border-white/10 relative overflow-hidden">
@@ -267,7 +340,7 @@ export default function LandingPage() {
                         Join top tier financial institutions using BFI to monitor billions in volume and protect millions of customers.
                     </p>
                     <button
-                        onClick={handleAction}
+                        onClick={handleLaunch}
                         className="px-12 py-5 rounded-2xl bg-white text-navy-950 font-extrabold text-xl hover:bg-teal-400 hover:text-white transition-all shadow-2xl relative z-10 active:scale-95"
                     >
                         Secure Access Portal
