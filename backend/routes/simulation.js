@@ -51,7 +51,11 @@ router.post('/start', async (req, res) => {
                 ? generateFraudTransaction(accounts, patterns)
                 : generateNormalTransaction(accounts);
 
-            const response = await axios.post('http://localhost:5000/api/transactions', tx, { timeout: 5000 });
+            const apiUrl = `http://127.0.0.1:${process.env.PORT || 5000}/api/transactions`;
+            const response = await axios.post(apiUrl, tx, {
+                timeout: 5000,
+                headers: process.env.SERVICE_API_KEY ? { 'x-api-key': process.env.SERVICE_API_KEY } : {}
+            });
 
             simulationStats.sent++;
             if (response.data?.transaction?.isFraud) simulationStats.fraudDetected++;
@@ -103,7 +107,8 @@ router.post('/demo', async (req, res) => {
         for (let i = 0; i < chain.length - 1; i++) {
             const timestamp = new Date(baseTime.getTime() + i * 60 * 1000); // 1 min apart
             try {
-                const response = await axios.post('http://localhost:5000/api/transactions', {
+                const apiUrl = `http://127.0.0.1:${process.env.PORT || 5000}/api/transactions`;
+                const response = await axios.post(apiUrl, {
                     sender: chain[i],
                     receiver: chain[i + 1],
                     amount: amount - (i * 1000), // slight decrease to simulate real layering
@@ -111,7 +116,10 @@ router.post('/demo', async (req, res) => {
                     type: 'transfer',
                     channel: 'NEFT',
                     description: `Demo layering transaction ${i + 1}`,
-                }, { timeout: 5000 });
+                }, {
+                    timeout: 5000,
+                    headers: process.env.SERVICE_API_KEY ? { 'x-api-key': process.env.SERVICE_API_KEY } : {}
+                });
 
                 results.push(response.data);
                 await new Promise(r => setTimeout(r, 200)); // small delay
