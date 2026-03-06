@@ -1,8 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { transactionApi, alertApi, accountApi } from '../api';
-import { Shield, Zap, Search, GitBranch, Lock, BarChart3, ChevronRight, Globe, Server, Cpu, Activity, FileText } from 'lucide-react';
+import { Shield, Zap, Search, GitBranch, Lock, ChevronRight, Globe, Server, Cpu, Activity, FileText } from 'lucide-react';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 
@@ -11,52 +10,19 @@ gsap.registerPlugin(ScrollTrigger);
 export default function LandingPage() {
     const navigate = useNavigate();
     const { user } = useAuth();
-    const [stats, setStats] = useState({
-        transactions: '...',
-        alerts: '...',
-        accounts: '...',
-        activeInvestigations: '...'
-    });
 
     const heroRef = useRef<HTMLDivElement>(null);
     const featuresRef = useRef<HTMLDivElement>(null);
-    const statsRef = useRef<HTMLDivElement>(null);
+    const pipelineRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        const fetchStats = async () => {
-            try {
-                const [txData, alertData, accData] = await Promise.all([
-                    transactionApi.stats(),
-                    alertApi.stats(),
-                    accountApi.stats()
-                ]);
-
-                setStats({
-                    transactions: txData.data.totalCount?.toLocaleString() || '0',
-                    alerts: alertData.data.totalAlerts?.toLocaleString() || '0',
-                    accounts: accData.data.totalAccounts?.toLocaleString() || '0',
-                    activeInvestigations: alertData.data.statusBreakdown?.open?.toLocaleString() || '0'
-                });
-            } catch (err) {
-                console.warn('Failed to fetch real-time stats for homepage');
-                setStats({
-                    transactions: '0',
-                    alerts: '0',
-                    accounts: '0',
-                    activeInvestigations: '0'
-                });
-            }
-        };
-
-        fetchStats();
-
         const ctx = gsap.context(() => {
             // Hero Animation
             const tl = gsap.timeline();
             tl.from('.hero-title', { y: 60, opacity: 0, duration: 0.8, ease: 'power3.out' })
-                .from('.hero-subtitle', { y: 30, opacity: 0, duration: 0.8, ease: 'power2.out' }, '-=0.4')
+                .from('.hero-subtitle', { y: 30, opacity: 0, duration: 1, ease: 'power2.out' }, '-=0.4')
                 .from('.hero-cta', { y: 20, opacity: 0, duration: 0.6, ease: 'power2.out' }, '-=0.3')
-                .from('.hero-visual', { scale: 0.95, opacity: 0, duration: 1, ease: 'power2.out' }, '-=0.8');
+                .from('.hero-visual', { scale: 0.95, opacity: 0, duration: 1.2, ease: 'power2.out' }, '-=0.8');
 
             // Floating elements animation
             gsap.to('.floating-blob', {
@@ -83,16 +49,16 @@ export default function LandingPage() {
                 ease: 'power2.out'
             });
 
-            // Stats animation
-            gsap.from('.stat-item', {
+            // Pipeline animation
+            gsap.from('.pipeline-step', {
                 scrollTrigger: {
-                    trigger: statsRef.current,
-                    start: 'top 95%',
+                    trigger: pipelineRef.current,
+                    start: 'top 90%',
                 },
-                y: 20,
+                x: -30,
                 opacity: 0,
-                stagger: 0.1,
-                duration: 0.6,
+                stagger: 0.2,
+                duration: 0.8,
                 ease: 'power2.out'
             });
         });
@@ -210,18 +176,25 @@ export default function LandingPage() {
                 </div>
             </section>
 
-            {/* Stats Bar */}
-            <div ref={statsRef} className="relative z-10 bg-white shadow-2xl py-12 px-6">
-                <div className="max-w-7xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-8">
+            {/* Pipeline Strip */}
+            <div ref={pipelineRef} className="relative z-10 border-y border-white/5 bg-navy-900/30 backdrop-blur-xl py-12 px-6">
+                <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-12">
                     {[
-                        { label: 'Transactions Processed', val: stats.transactions },
-                        { label: 'Intelligence Alerts', val: stats.alerts },
-                        { label: 'Active Investigations', val: stats.activeInvestigations },
-                        { label: 'Entities Monitored', val: stats.accounts },
-                    ].map(s => (
-                        <div key={s.label} className="text-center stat-item">
-                            <div className="text-3xl lg:text-5xl font-extrabold text-navy-950 mb-1">{s.val}</div>
-                            <div className="text-xs lg:text-sm font-bold text-slate-500 uppercase tracking-widest">{s.label}</div>
+                        { step: '01', title: 'Data Simulation', desc: 'Synthetic financial ingestion', icon: Server },
+                        { step: '02', title: 'Neural Analysis', desc: 'Anomaly detection scans', icon: Cpu },
+                        { step: '03', title: 'Graph Mapping', desc: 'Network linkage discovery', icon: GitBranch },
+                        { step: '04', title: 'Case Resolution', desc: 'Evidence-based reporting', icon: Shield },
+                    ].map((item, idx) => (
+                        <div key={idx} className="flex items-center gap-6 pipeline-step">
+                            <div className="text-4xl font-black text-white/10 tracking-tighter">{item.step}</div>
+                            <div>
+                                <div className="flex items-center gap-2 mb-1">
+                                    <item.icon size={14} className="text-teal-400" />
+                                    <span className="text-sm font-bold text-white uppercase tracking-wider">{item.title}</span>
+                                </div>
+                                <div className="text-xs text-slate-500 font-medium">{item.desc}</div>
+                            </div>
+                            {idx < 3 && <div className="hidden lg:block w-12 h-[1px] bg-white/5 ml-4" />}
                         </div>
                     ))}
                 </div>
