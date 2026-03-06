@@ -1,47 +1,82 @@
 """
-BFI ML Anomaly Detection Microservice
-Uses Isolation Forest for unsupervised fraud detection
+BFI ML Anomaly Detection Microservice — Production Build
+Uses Isolation Forest (loaded once at startup) for fraud anomaly scoring.
 """
 
+import logging
+import os
+import random
+from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import Optional
+
+import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional
-import numpy as np
-from sklearn.ensemble import IsolationForest
-from sklearn.preprocessing import StandardScaler
-import joblib
-import os
-import json
-import random
-from datetime import datetime
-import uvicorn
+from pydantic import BaseModel, Field, field_validator
 
+import model as ml_model
+
+# ─── Logging ──────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("bfi-ml")
+
+
+# ─── Lifespan: load model ONCE at startup ─────────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("🚀 BFI ML Service starting — loading model...")
+    ml_model.load_model()
+    logger.info("✅ Model ready. Service is live.")
+    yield
+    logger.info("🛑 BFI ML Service shutting down.")
+
+
+# ─── App ──────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="BFI ML Anomaly Detection Service",
-    description="Isolation Forest-based fraud anomaly detection",
-    version="1.0.0"
+    description="Isolation Forest-based fraud anomaly detection for BFI platform",
+    version="2.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Allow all origins for production flexibility (can be restricted via firewall/env)
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Model storage
-model = None
-scaler = None
-MODEL_PATH = "bfi_model.pkl"
-SCALER_PATH = "bfi_scaler.pkl"
 
-# Feature history for online learning
-feature_history = []
+# ─── Schemas ──────────────────────────────────────────────────────────────────
+class PredictRequest(BaseModel):
+    amount: float = Field(..., gt=0, description="Transaction amount in INR")
+    frequency: int = Field(1, ge=1, le=200, description="Recent transaction frequency")
+    account_age: int = Field(365, ge=0, description="Account age in days")
+    avg_txn: float = Field(0, ge=0, description="Average transaction value")
+    hour: Optional[int] = Field(None, ge=0, le=23, description="Hour of transaction (0-23)")
+    cross_border: Optional[int] = Field(0, ge=0, le=1)
+    is_round_amount: Optional[int] = Field(None, description="Auto-detected if not provided")
+
+    @field_validator("amount")
+    @classmethod
+    def amount_must_be_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("Transaction amount must be positive")
+        return v
+
+
+class PredictResponse(BaseModel):
+    anomaly_score: float
+    risk_level: str
 
 
 class TransactionRequest(BaseModel):
+    """Legacy schema maintained for backward-compat with BFI backend."""
     transaction_amount: float
     transaction_id: Optional[str] = None
     sender: Optional[str] = None
@@ -61,232 +96,159 @@ class TrainRequest(BaseModel):
     n_samples: Optional[int] = 5000
 
 
-def load_or_create_model():
-    """Load existing model or create and train a new one"""
-    global model, scaler
-
-    if os.path.exists(MODEL_PATH) and os.path.exists(SCALER_PATH):
-        try:
-            model = joblib.load(MODEL_PATH)
-            scaler = joblib.load(SCALER_PATH)
-            print("✅ Model loaded from disk")
-            return
-        except Exception as e:
-            print(f"⚠️ Failed to load model: {e}")
-
-    # Generate synthetic training data
-    print("🔄 Training new Isolation Forest model...")
-    train_model_with_synthetic_data()
+# Feature accumulator for online context (in-memory, per process)
+_feature_history: list = []
 
 
-def generate_training_data(n_samples=5000):
-    """Generate synthetic banking transaction data for training"""
-    data = []
-
-    # Normal transactions (80%)
-    normal_count = int(n_samples * 0.80)
-    for _ in range(normal_count):
-        amount = np.random.lognormal(mean=9, sigma=1.5)  # ~₹8k normal
-        hour = np.random.choice(range(8, 22), p=None)  # business hours
-        freq = np.random.randint(1, 10)
-        account_age = np.random.randint(30, 3650)  # 1 month to 10 years
-        avg_tx = amount * np.random.uniform(0.7, 1.3)
-
-        data.append([
-            min(amount, 1000000),
-            freq,
-            account_age,
-            avg_tx,
-            hour,
-            0,  # cross_border
-            0,  # is_round_amount
-        ])
-
-    # Fraudulent transactions (20%)
-    fraud_count = n_samples - normal_count
-    for _ in range(fraud_count):
-        pattern = random.choice(['large', 'structuring', 'rapid', 'dormant'])
-
-        if pattern == 'large':
-            amount = np.random.uniform(500000, 2000000)
-            freq = np.random.randint(1, 3)
-            account_age = np.random.randint(30, 3650)
-            avg_tx = np.random.uniform(5000, 20000)
-        elif pattern == 'structuring':
-            amount = np.random.uniform(90000, 99999)
-            freq = np.random.randint(5, 20)
-            account_age = np.random.randint(30, 1000)
-            avg_tx = np.random.uniform(10000, 50000)
-        elif pattern == 'rapid':
-            amount = np.random.uniform(10000, 100000)
-            freq = np.random.randint(15, 50)
-            account_age = np.random.randint(10, 500)
-            avg_tx = np.random.uniform(5000, 50000)
-        else:  # dormant
-            amount = np.random.uniform(50000, 500000)
-            freq = np.random.randint(1, 3)
-            account_age = np.random.randint(365, 3650)
-            avg_tx = np.random.uniform(1000, 10000)
-
-        hour = np.random.choice([0, 1, 2, 3, 23])  # odd hours
-        data.append([
-            min(amount, 2000000),
-            freq,
-            account_age,
-            avg_tx,
-            hour,
-            random.randint(0, 1),
-            1 if amount % 10000 == 0 else 0,
-        ])
-
-    return np.array(data)
-
-
-def train_model_with_synthetic_data(n_samples=5000):
-    """Train Isolation Forest on synthetic data"""
-    global model, scaler
-
-    X = generate_training_data(n_samples)
-
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-
-    model = IsolationForest(
-        n_estimators=200,
-        contamination=0.15,
-        random_state=42,
-        max_features=7,
-        bootstrap=False,
-    )
-    model.fit(X_scaled)
-
-    # Save model
-    joblib.dump(model, MODEL_PATH)
-    joblib.dump(scaler, SCALER_PATH)
-    print(f"✅ Model trained on {n_samples} samples and saved")
-
-
-def extract_features(transaction: TransactionRequest) -> dict:
-    """Extract ML features from transaction"""
-    amount = transaction.transaction_amount
-    hour = 12  # default
-    if transaction.timestamp:
-        try:
-            dt = datetime.fromisoformat(transaction.timestamp.replace('Z', '+00:00'))
-            hour = dt.hour
-        except:
-            pass
-
-    # Use historical context if available
-    avg_tx = np.mean([f[0] for f in feature_history[-100:]]) if feature_history else amount
-    freq = len([f for f in feature_history[-50:] if f[1] == transaction.sender]) if transaction.sender else 1
-    account_age = 365  # default
-
-    is_round = 1 if amount >= 50000 and amount % 10000 == 0 else 0
-
-    return {
-        "transaction_amount": min(amount, 2000000),
-        "transaction_frequency": min(freq + 1, 50),
-        "account_age": account_age,
-        "average_transaction_value": avg_tx,
-        "hour_of_day": hour,
-        "cross_border": 0,
-        "is_round_amount": is_round,
-    }
-
-
-@app.on_event("startup")
-async def startup():
-    load_or_create_model()
-    print("🚀 BFI ML Service started on port 8001")
-
+# ─── Routes ───────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 def health():
+    """Health check — used by Render and the BFI System Health dashboard."""
+    loaded = ml_model.is_loaded()
     return {
-        "status": "ok",
-        "model_loaded": model is not None,
-        "training_samples": len(feature_history),
+        "status": "ML service running",
+        "model_loaded": loaded,
         "service": "BFI ML Anomaly Detection",
+        "version": "2.0.0",
     }
 
 
-@app.post("/predict", response_model=PredictionResponse)
-def predict(request: TransactionRequest):
-    """Predict anomaly score for a transaction"""
-    if model is None or scaler is None:
+@app.post("/predict", response_model=PredictResponse)
+def predict(req: PredictRequest):
+    """
+    New clean prediction endpoint.
+    Called from the BFI fraud detection engine via ML_SERVICE_URL.
+    """
+    if not ml_model.is_loaded():
+        raise HTTPException(status_code=503, detail="Model not loaded yet. Retry shortly.")
+
+    # Auto-detect round amount if not provided
+    is_round = req.is_round_amount if req.is_round_amount is not None else (
+        1 if req.amount >= 50_000 and req.amount % 10_000 == 0 else 0
+    )
+    hour = req.hour if req.hour is not None else datetime.now().hour
+
+    logger.info(
+        "Prediction request | amount=%.2f freq=%d age=%d",
+        req.amount, req.frequency, req.account_age,
+    )
+
+    try:
+        result = ml_model.predict(
+            transaction_amount=req.amount,
+            transaction_frequency=req.frequency,
+            account_age=req.account_age,
+            average_transaction_value=req.avg_txn or req.amount,
+            hour_of_day=hour,
+            cross_border=req.cross_border or 0,
+            is_round_amount=is_round,
+        )
+    except Exception as exc:
+        logger.error("Model inference error: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Inference error: {exc}")
+
+    logger.info(
+        "Prediction result | score=%.4f risk=%s",
+        result["anomaly_score"], result["risk_level"]
+    )
+    return PredictResponse(**result)
+
+
+@app.post("/predict/legacy", response_model=PredictionResponse)
+def predict_legacy(request: TransactionRequest):
+    """
+    Legacy prediction endpoint — backward-compatible with existing BFI backend calls.
+    The backend currently sends `transaction_amount`, `sender`, `timestamp` etc.
+    """
+    global _feature_history
+
+    if not ml_model.is_loaded():
         raise HTTPException(status_code=503, detail="Model not loaded")
 
-    features = extract_features(request)
-    feature_vector = np.array([[
-        features["transaction_amount"],
-        features["transaction_frequency"],
-        features["account_age"],
-        features["average_transaction_value"],
-        features["hour_of_day"],
-        features["cross_border"],
-        features["is_round_amount"],
-    ]])
+    amount = request.transaction_amount
+    hour = 12
+    if request.timestamp:
+        try:
+            dt = datetime.fromisoformat(request.timestamp.replace("Z", "+00:00"))
+            hour = dt.hour
+        except Exception:
+            pass
 
-    # Store for online context
-    feature_history.append([features["transaction_amount"], request.sender])
-    if len(feature_history) > 1000:
-        feature_history.pop(0)
+    avg_tx = float(np.mean([f[0] for f in _feature_history[-100:]])) if _feature_history else amount
+    freq = len([f for f in _feature_history[-50:] if f[1] == request.sender]) if request.sender else 1
+    is_round = 1 if amount >= 50_000 and amount % 10_000 == 0 else 0
 
-    X_scaled = scaler.transform(feature_vector)
+    try:
+        result = ml_model.predict(
+            transaction_amount=amount,
+            transaction_frequency=freq + 1,
+            account_age=365,
+            average_transaction_value=avg_tx,
+            hour_of_day=hour,
+            cross_border=0,
+            is_round_amount=is_round,
+        )
+    except Exception as exc:
+        logger.error("Legacy inference error: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Inference error: {exc}")
 
-    # Isolation Forest score: -1=anomaly, 1=normal
-    raw_score = model.score_samples(X_scaled)[0]
-    prediction = model.predict(X_scaled)[0]
+    # Update feature history
+    _feature_history.append([amount, request.sender])
+    if len(_feature_history) > 1000:
+        _feature_history.pop(0)
 
-    # Convert to 0-100 anomaly score (higher = more anomalous)
-    # Raw scores typically in range [-0.6, 0.1]
-    anomaly_score = max(0, min(100, int((-raw_score - 0.1) * 200)))
-    is_anomaly = prediction == -1
-
-    # Confidence: how far from decision boundary
-    confidence = min(0.99, abs(raw_score) * 3)
+    anomaly_score_0_100 = round(result["anomaly_score"] * 100)
+    is_anomaly = result["risk_level"] in ("High", "Critical")
+    confidence = round(min(0.99, result["anomaly_score"] * 1.2), 3)
 
     return PredictionResponse(
         transaction_id=request.transaction_id or "unknown",
-        anomaly_score=anomaly_score,
+        anomaly_score=anomaly_score_0_100,
         is_anomaly=is_anomaly,
-        confidence=round(confidence, 3),
-        features_used=features,
+        confidence=confidence,
+        features_used={
+            "transaction_amount": min(amount, 2_000_000),
+            "transaction_frequency": min(freq + 1, 50),
+            "account_age": 365,
+            "average_transaction_value": avg_tx,
+            "hour_of_day": hour,
+            "cross_border": 0,
+            "is_round_amount": is_round,
+        },
     )
 
 
 @app.post("/train")
 def train(request: TrainRequest):
-    """Retrain model with fresh synthetic data"""
-    train_model_with_synthetic_data(request.n_samples)
-    return {
-        "success": True,
-        "message": f"Model retrained with {request.n_samples} samples",
-        "model_params": {
-            "algorithm": "Isolation Forest",
-            "n_estimators": 200,
-            "contamination": 0.15,
+    """Force retrain model with fresh synthetic data."""
+    try:
+        ml_model._model, ml_model._scaler = ml_model._train_and_save()
+        logger.info("Model retrained with %d samples", request.n_samples)
+        return {
+            "success": True,
+            "message": f"Model retrained with {request.n_samples} samples",
+            "model_params": {"algorithm": "Isolation Forest", "n_estimators": 200, "contamination": 0.15},
         }
-    }
+    except Exception as exc:
+        logger.error("Retraining failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/evaluate")
 def evaluate():
-    """Return model evaluation metrics (using known test patterns)"""
-    if model is None:
+    """Return live model evaluation metrics using internal synthetic test set."""
+    if not ml_model.is_loaded():
         raise HTTPException(status_code=503, detail="Model not loaded")
 
-    # Generate test set
-    X_test = generate_training_data(1000)
-    # Last 200 are fraud patterns
+    from model import _generate_training_data, _model, _scaler
+    X_test = _generate_training_data(1000)
     y_true = [0] * 800 + [1] * 200
 
-    X_scaled = scaler.transform(X_test)
-    predictions = model.predict(X_scaled)
+    X_scaled = _scaler.transform(X_test)
+    predictions = _model.predict(X_scaled)
     y_pred = [1 if p == -1 else 0 for p in predictions]
 
-    # Calculate metrics
     tp = sum(1 for t, p in zip(y_true, y_pred) if t == 1 and p == 1)
     fp = sum(1 for t, p in zip(y_true, y_pred) if t == 0 and p == 1)
     tn = sum(1 for t, p in zip(y_true, y_pred) if t == 0 and p == 0)
@@ -309,5 +271,6 @@ def evaluate():
 
 
 if __name__ == "__main__":
+    import uvicorn
     port = int(os.environ.get("PORT", 8001))
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")

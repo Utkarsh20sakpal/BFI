@@ -293,14 +293,15 @@ async function getMLAnomalyScore(transaction) {
     const ML_URL = process.env.ML_SERVICE_URL || 'http://localhost:8001';
 
     const response = await axios.post(`${ML_URL}/predict`, {
-        transaction_amount: transaction.amount,
-        transaction_id: transaction.transactionId,
-        sender: transaction.sender,
-        receiver: transaction.receiver,
-        timestamp: transaction.timestamp,
+        amount: transaction.amount,
+        frequency: 1,                     // enriched by ML service via history
+        account_age: 365,                 // default; future: pull from Account model
+        avg_txn: transaction.amount,
+        hour: new Date(transaction.timestamp).getHours(),
     }, { timeout: 3000 });
 
-    return response.data.anomaly_score || 0;
+    // New /predict returns anomaly_score as 0-1 float — convert to 0-100
+    return Math.round((response.data.anomaly_score || 0) * 100);
 }
 
 /**
