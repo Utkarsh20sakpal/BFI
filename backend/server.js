@@ -19,24 +19,27 @@ const networkRoutes = require('./routes/networks');
 const app = express();
 const server = http.createServer(app);
 
-const allowedOrigins = [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    process.env.FRONTEND_URL
-].filter(Boolean);
+const corsOrigin = (origin, callback) => {
+    // Allow requests with no origin (Postman, curl, server-to-server)
+    if (!origin) return callback(null, true);
+    // Allow localhost (dev)
+    if (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) return callback(null, true);
+    // Allow any Render-hosted subdomain
+    if (origin.endsWith('.onrender.com')) return callback(null, true);
+    // Allow explicitly configured FRONTEND_URL
+    if (process.env.FRONTEND_URL && origin === process.env.FRONTEND_URL) return callback(null, true);
+    // Allow Vercel/Netlify subdomains in case frontend is deployed there
+    if (origin.endsWith('.vercel.app') || origin.endsWith('.netlify.app')) return callback(null, true);
+    console.warn(`[CORS] Blocked origin: ${origin}`);
+    callback(new Error(`CORS: origin ${origin} not allowed`));
+};
 
 const io = new Server(server, {
-    cors: {
-        origin: allowedOrigins,
-        methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    },
+    cors: { origin: corsOrigin, methods: ['GET', 'POST', 'PUT', 'DELETE'] },
 });
 
 // Middleware
-app.use(cors({
-    origin: allowedOrigins,
-    credentials: true,
-}));
+app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
